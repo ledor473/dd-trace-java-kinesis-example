@@ -14,7 +14,10 @@ import software.amazon.awssdk.services.kinesis.model.GetRecordsRequest;
 import software.amazon.awssdk.services.kinesis.model.GetRecordsResponse;
 import software.amazon.awssdk.services.kinesis.model.Record;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 
 public class SdkConsumer {
 	private static final int READ_LIMIT = 1000;
@@ -28,6 +31,7 @@ public class SdkConsumer {
 	public void readRecords(String streamName) {
 		Tracer tracer = GlobalTracer.get();
 
+		long requestTime = System.currentTimeMillis();
 		GetRecordsRequest recordsRequest = GetRecordsRequest.builder()
 				.limit(READ_LIMIT).build();
 
@@ -39,10 +43,20 @@ public class SdkConsumer {
 
 			SpanContext extractedContext = tracer.extract(Format.Builtin.HTTP_HEADERS, message);
 
+			Span inflight = tracer.buildSpan("kinesis.in-flight")
+					.withTag("kinesis.stream", streamName)
+					.asChildOf(extractedContext)
+					.withStartTimestamp(
+							ChronoUnit.MICROS.between(Instant.EPOCH,record.approximateArrivalTimestamp()))
+					.start();
+
 			Span span = tracer.buildSpan("kinesis.consume")
 					.withTag("kinesis.stream", streamName)
 					.asChildOf(extractedContext)
 					.start();
+
+			inflight.finish(TimeUnit.MILLISECONDS.toMicros(requestTime));
+
 			try (Scope scope = tracer.activateSpan(span)) {
 				// TODO Do something with message
 				// if applicable, potentially creating a child span under "span" if that makes business sense
